@@ -1,0 +1,68 @@
+name: Windows Manual Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: Build configuration
+        required: true
+        default: Release
+        type: choice
+        options:
+          - Release
+          - Debug
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure (Windows preset)
+        shell: pwsh
+        run: |
+          $maxAttempts = 3
+          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+            Write-Host "CMake configure attempt $attempt of $maxAttempts"
+            cmake --preset windows-vs2022
+            if ($LASTEXITCODE -eq 0) {
+              break
+            }
+
+            if ($attempt -eq $maxAttempts) {
+              throw "CMake configure failed after $maxAttempts attempts."
+            }
+
+            Write-Host "Configure failed; clearing build/windows-vs2022 before retry..."
+            if (Test-Path "build/windows-vs2022") {
+              Remove-Item -Path "build/windows-vs2022" -Recurse -Force
+            }
+            Start-Sleep -Seconds (15 * $attempt)
+          }
+
+      - name: Build app + UI regression tests
+        run: cmake --build --preset windows-vs2022-release --config ${{ inputs.build_type }}
+
+      - name: Run UI regression tests
+        run: ctest --preset windows-vs2022-release-tests --output-on-failure -C ${{ inputs.build_type }}
+
+      - name: Collect app executable
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+          $exe = Get-ChildItem -Path build/windows-vs2022 -Filter TheSampledexWorkflow.exe -Recurse | Select-Object -First 1
+          if (-not $exe) {
+            throw "TheSampledexWorkflow.exe was not found under build/windows-vs2022"
+          }
+          Copy-Item $exe.FullName artifacts/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TheSampledexWorkflow-${{ inputs.build_type }}
+          path: artifacts/**
